@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Video transcription CLI. Transcribes video/audio files to markdown with timestamps."""
 
+__version__ = "0.1.0"
+
 import argparse
 import os
 import subprocess
@@ -153,6 +155,7 @@ def write_markdown(segments: list[dict], output_path: str, source: str):
 
 def main():
     parser = argparse.ArgumentParser(description="Transcribe video/audio to markdown with timestamps.")
+    parser.add_argument("-v", "--version", action="version", version=f"xscribe {__version__}")
     parser.add_argument("input", help="File path or stream URL (m3u8, etc.) to transcribe")
     parser.add_argument("-o", "--output", help="Output markdown file path (default: <input_name>.md)")
     parser.add_argument("-m", "--model", default="base", choices=["tiny", "base", "small", "medium", "large-v3"],
