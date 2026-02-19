@@ -12,17 +12,12 @@ Powered by [faster-whisper](https://github.com/SYSTRAN/faster-whisper).
 pip install xscribe
 ```
 
-You also need **ffmpeg** installed on your system:
+Missing dependencies (ffmpeg, yt-dlp) are detected automatically — xscribe will offer to install them for you on first run.
+
+Optionally, pre-download the transcription model so your first transcription is fast:
 
 ```bash
-# macOS
-brew install ffmpeg
-
-# Ubuntu/Debian
-sudo apt install ffmpeg
-
-# Windows
-winget install ffmpeg
+xscribe setup
 ```
 
 ## Quick start
@@ -41,18 +36,18 @@ This creates `interview.md` in your current folder with the full transcript and 
 xscribe "https://stream.example.com/video/playlist.m3u8"
 ```
 
-xscribe will download the video first, then transcribe it. You'll need [yt-dlp](https://github.com/yt-dlp/yt-dlp) installed for this (`brew install yt-dlp` or `pip install yt-dlp`).
+xscribe will download the video first, then transcribe it.
 
 ## Usage examples
 
 ```bash
-# Transcribe a podcast episode you downloaded
+# Transcribe a podcast episode
 xscribe episode-42.mp3
 
 # Transcribe a lecture recording
 xscribe lecture.mov
 
-# Transcribe a YouTube stream you grabbed the URL for
+# Transcribe a YouTube stream URL
 xscribe "https://manifest.googlevideo.com/.../playlist.m3u8"
 
 # Use a more accurate model (slower but better for tricky audio)
@@ -60,6 +55,15 @@ xscribe meeting.mp4 -m large-v3
 
 # Save the transcript to a specific file
 xscribe keynote.mp4 -o keynote-notes.md
+
+# Force a specific language instead of auto-detect
+xscribe video.mp4 -l es
+
+# Transcribe multiple files at once
+xscribe recording1.mp4 recording2.mp4 recording3.mp4
+
+# Pre-download a specific model
+xscribe setup -m large-v3
 ```
 
 **Supported file types:** mp4, mp3, wav, mov, mkv, webm, m4a, flac, ogg, and anything else ffmpeg can read.
@@ -76,9 +80,16 @@ Most streaming videos use .m3u8 playlist URLs behind the scenes. Here's how to f
 6. You'll see one or more requests appear — right-click the URL and select **Copy URL**
 7. Paste it into xscribe: `xscribe "https://...your-copied-url.m3u8"`
 
-## Model sizes
+## Options
 
-xscribe uses OpenAI's Whisper speech recognition. You can choose different model sizes depending on whether you want speed or accuracy:
+| Flag | Description |
+|------|-------------|
+| `-m, --model` | Whisper model size (see below) |
+| `-l, --lang` | Force language code (e.g. `en`, `es`, `fr`, `de`, `ja`) |
+| `-o, --output` | Custom output file path |
+| `-v, --version` | Show version |
+
+## Model sizes
 
 | Model | Flag | Best for |
 |-------|------|----------|
@@ -88,7 +99,7 @@ xscribe uses OpenAI's Whisper speech recognition. You can choose different model
 | Medium | `-m medium` | High accuracy for important transcripts |
 | Large | `-m large-v3` | Best possible accuracy, but slowest |
 
-The model downloads automatically the first time you use it and gets cached for future runs.
+The model downloads automatically the first time you use it and gets cached for future runs. Use `xscribe setup -m <model>` to pre-download.
 
 ## Output format
 
