@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Video transcription CLI. Transcribes video/audio files to markdown with timestamps."""
 
-__version__ = "0.3.3"
+__version__ = "0.3.4"
 
 import argparse
 import glob
@@ -385,18 +385,28 @@ def cmd_setup(args):
 
 
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "setup":
+        setup_parser = argparse.ArgumentParser(
+            prog="xscribe setup",
+            description="Pre-download a Whisper model.",
+        )
+        setup_parser.add_argument(
+            "-m",
+            "--model",
+            default="base",
+            choices=["tiny", "base", "small", "medium", "large-v3"],
+            help="Model to download (default: base)",
+        )
+        args = setup_parser.parse_args(sys.argv[2:])
+        cmd_setup(args)
+        return
+
     parser = argparse.ArgumentParser(
         prog="xscribe",
         description="Download and transcribe any video to markdown with timestamps.",
+        epilog="Use `xscribe setup` to pre-download a Whisper model.",
     )
     parser.add_argument("-v", "--version", action="version", version=f"xscribe {__version__}")
-    subparsers = parser.add_subparsers(dest="command")
-
-    # setup subcommand
-    setup_parser = subparsers.add_parser("setup", help="Pre-download a Whisper model")
-    setup_parser.add_argument("-m", "--model", default="base",
-                              choices=["tiny", "base", "small", "medium", "large-v3"],
-                              help="Model to download (default: base)")
 
     # default transcription arguments (on main parser)
     parser.add_argument("input", nargs="*", help="File path(s) or URL(s) to transcribe")
@@ -430,10 +440,6 @@ def main():
     )
 
     args = parser.parse_args()
-
-    if args.command == "setup":
-        cmd_setup(args)
-        return
 
     if not args.input:
         parser.print_help()
