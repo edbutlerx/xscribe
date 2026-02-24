@@ -68,6 +68,9 @@ xscribe video.mp4 -l es
 # Force URL downloads to convert to mp3
 xscribe "https://www.youtube.com/watch?v=dQw4w9WgXcQ" --audio-format mp3
 
+# If YouTube blocks anonymous requests, pass browser cookies
+xscribe "https://www.youtube.com/watch?v=dQw4w9WgXcQ" --cookies-from-browser chrome
+
 # Force URL downloads to keep video-first behavior
 xscribe "https://stream.example.com/video/playlist.m3u8" --download-mode video
 
@@ -106,6 +109,7 @@ Most streaming videos use .m3u8 playlist URLs behind the scenes. Here's how to f
 | `--audio-format` | For URL inputs, download/convert to one format: `best`, `mp3`, `m4a`, `wav`, `opus`, `vorbis`, `flac` |
 | `--list-videos` | For URL inputs, list extractable videos with 1-based indexes and exit |
 | `--video-index` | For URL inputs with multiple detected videos, pick one index to transcribe |
+| `--cookies-from-browser` | For URL inputs, pass browser cookies to `yt-dlp` (for site-gated/blocked videos) |
 | `-o, --output` | Custom output file path |
 | `-v, --version` | Show version |
 

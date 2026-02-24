@@ -1,19 +1,23 @@
 #!/usr/bin/env python3
 """Video transcription CLI. Transcribes video/audio files to markdown with timestamps."""
 
-__version__ = "0.3.4"
+__version__ = "0.3.7"
 
 import argparse
 import glob
+import html
 import json
 import os
 import platform
+import re
 import shutil
 import signal
 import subprocess
 import sys
 import tempfile
 import threading
+import urllib.parse
+import urllib.request
 from pathlib import Path
 
 SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
@@ -63,7 +67,7 @@ def _get_system_install_hint(package: str) -> str:
     return f"Install {package} from https://ffmpeg.org"
 
 
-def check_dependencies(need_ytdlp: bool = False):
+def check_dependencies(need_ytdlp: bool = False, need_whisper: bool = True):
     """Check and auto-install missing dependencies."""
     if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
         hint = _get_system_install_hint("ffmpeg")
@@ -79,20 +83,21 @@ def check_dependencies(need_ytdlp: bool = False):
             print(f"Please install ffmpeg manually: {hint}", file=sys.stderr)
             sys.exit(1)
 
-    try:
-        import faster_whisper  # noqa: F401
-    except ImportError:
-        print("faster-whisper is required but not installed.")
-        answer = input("Install it now? [Y/n] ").strip().lower()
-        if answer in ("", "y", "yes"):
-            if _pip_install("faster-whisper"):
-                print("✓ faster-whisper installed")
+    if need_whisper:
+        try:
+            import faster_whisper  # noqa: F401
+        except ImportError:
+            print("faster-whisper is required but not installed.")
+            answer = input("Install it now? [Y/n] ").strip().lower()
+            if answer in ("", "y", "yes"):
+                if _pip_install("faster-whisper"):
+                    print("✓ faster-whisper installed")
+                else:
+                    print("Failed to install. Run manually: pip install faster-whisper", file=sys.stderr)
+                    sys.exit(1)
             else:
-                print("Failed to install. Run manually: pip install faster-whisper", file=sys.stderr)
+                print("Run manually: pip install faster-whisper", file=sys.stderr)
                 sys.exit(1)
-        else:
-            print("Run manually: pip install faster-whisper", file=sys.stderr)
-            sys.exit(1)
 
     if need_ytdlp and not shutil.which("yt-dlp"):
         print("yt-dlp is required for online URLs (including YouTube) but not installed.")
@@ -115,7 +120,12 @@ def is_stream_url(path: str) -> bool:
 
 
 def download_stream(
-    url: str, output_dir: str, audio_format: str, download_mode: str, video_index: int | None
+    url: str,
+    output_dir: str,
+    audio_format: str,
+    download_mode: str,
+    video_index: int | None,
+    cookies_from_browser: str | None,
 ) -> str:
     """Download an online URL using yt-dlp and return the output file path."""
     global _active_spinner
@@ -127,6 +137,8 @@ def download_stream(
         "--restrict-filenames",
         "--windows-filenames",
     ]
+    if cookies_from_browser:
+        cmd.extend(["--cookies-from-browser", cookies_from_browser])
     if video_index is None:
         cmd.append("--no-playlist")
     else:
@@ -151,6 +163,17 @@ def download_stream(
         spinner.stop("✗ Download failed")
         _active_spinner = None
         print(f"yt-dlp error: {result.stderr}", file=sys.stderr)
+        lower_err = result.stderr.lower()
+        if ("youtube.com" in url or "youtu.be" in url) and (
+            "http error 403" in lower_err or "sabr" in lower_err
+        ):
+            print(
+                "Hint: YouTube is blocking this request. Try:\n"
+                "  1) pip install -U yt-dlp\n"
+                "  2) xscribe \"<youtube-url>\" --cookies-from-browser chrome\n"
+                "     (or safari/firefox/edge)",
+                file=sys.stderr,
+            )
         sys.exit(1)
     spinner.stop("✓ Download complete")
     _active_spinner = None
@@ -165,9 +188,11 @@ def download_stream(
     sys.exit(1)
 
 
-def list_url_videos(url: str) -> list[dict]:
+def list_url_videos(url: str, cookies_from_browser: str | None) -> list[dict]:
     """List extractable media entries for a URL using yt-dlp metadata."""
     cmd = ["yt-dlp", "--flat-playlist", "--dump-single-json", url]
+    if cookies_from_browser:
+        cmd[1:1] = ["--cookies-from-browser", cookies_from_browser]
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         print(f"yt-dlp error: {result.stderr}", file=sys.stderr)
@@ -186,13 +211,175 @@ def list_url_videos(url: str) -> list[dict]:
             title = entry.get("title") or "(untitled)"
             video_id = entry.get("id") or ""
             entry_url = entry.get("webpage_url") or entry.get("url") or ""
-            out.append({"index": i, "title": title, "id": video_id, "url": entry_url})
-        return out
+            out.append({"index": i, "title": title, "id": video_id, "url": entry_url, "source": "yt-dlp"})
+        return _merge_page_media_urls(url, out)
 
     title = data.get("title") or "(untitled)"
     video_id = data.get("id") or ""
     entry_url = data.get("webpage_url") or data.get("url") or url
-    return [{"index": 1, "title": title, "id": video_id, "url": entry_url}]
+    base = [{"index": 1, "title": title, "id": video_id, "url": entry_url, "source": "yt-dlp"}]
+    return _merge_page_media_urls(url, base)
+
+
+def _merge_page_media_urls(page_url: str, base_entries: list[dict]) -> list[dict]:
+    """Merge yt-dlp extracted entries with direct URL scan candidates from page HTML."""
+    seen = set()
+    merged = []
+    for entry in base_entries:
+        key = _canonical_media_key((entry.get("url") or "").strip())
+        if key:
+            seen.add(key)
+        merged.append(entry)
+
+    for media_url in _scan_page_for_media_urls(page_url):
+        key = _canonical_media_key(media_url)
+        if key in seen:
+            continue
+        seen.add(key)
+        title = _infer_title_from_url(media_url)
+        merged.append(
+            {
+                "index": 0,
+                "title": title,
+                "id": "",
+                "url": media_url,
+                "source": "page-scan",
+            }
+        )
+
+    for i, item in enumerate(merged, start=1):
+        item["index"] = i
+    return merged
+
+
+def _scan_page_for_media_urls(page_url: str) -> list[str]:
+    """Best-effort page scan for embedded media URLs (e.g., VTurb/ConverteAI/Wistia/m3u8)."""
+    try:
+        req = urllib.request.Request(
+            page_url,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+                )
+            },
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            raw = resp.read().decode("utf-8", errors="ignore")
+    except Exception:
+        return []
+
+    text = html.unescape(raw)
+    pattern = r"https?://[^\s\"'<>\\)]+"
+    found = re.findall(pattern, text, flags=re.IGNORECASE)
+
+    cleaned = []
+    seen = set()
+    for url in found:
+        # normalize minor trailing punctuation artifacts from HTML/text extraction
+        normalized = url.rstrip(".,;")
+        if not _is_likely_playable_url(normalized):
+            continue
+        key = _canonical_media_key(normalized)
+        if key in seen:
+            continue
+        seen.add(key)
+        cleaned.append(normalized)
+    return cleaned
+
+
+def _is_likely_playable_url(url: str) -> bool:
+    parsed = urllib.parse.urlparse(url)
+    host = (parsed.netloc or "").lower()
+    path = (parsed.path or "").lower()
+    query = (parsed.query or "").lower()
+
+    if not host or not path:
+        return False
+
+    if path.endswith((".js", ".css", ".woff", ".woff2", ".png", ".jpg", ".jpeg", ".gif", ".svg")):
+        return False
+
+    if path.endswith((".m3u8", ".mpd", ".mp4", ".webm", ".m4a", ".mov", ".mkv", ".mp3", ".wav", ".flac")):
+        return True
+
+    if host in ("youtube.com", "www.youtube.com", "m.youtube.com"):
+        return path.startswith("/watch") or path.startswith("/embed/")
+    if host == "youtu.be":
+        return len(path.strip("/")) > 0
+
+    if "vimeo.com" in host:
+        return "/video/" in path or bool(path.strip("/"))
+
+    if "wistia" in host:
+        return "/medias/" in path or ".m3u8" in query or ".m3u8" in path
+
+    if "converteai" in host or "vturb" in host:
+        return ".m3u8" in path or ".mpd" in path or ".mp4" in path
+
+    return False
+
+
+def _canonical_media_key(url: str) -> str:
+    ytid = _youtube_video_id(url)
+    if ytid:
+        return f"youtube:{ytid}"
+
+    parsed = urllib.parse.urlparse(url)
+    host = (parsed.netloc or "").lower()
+    path = (parsed.path or "").rstrip("/")
+    return f"{host}{path}"
+
+
+def _youtube_video_id(url: str) -> str | None:
+    parsed = urllib.parse.urlparse(url)
+    host = (parsed.netloc or "").lower()
+    path = (parsed.path or "").strip("/")
+
+    if host == "youtu.be" and path:
+        return path.split("/")[0]
+
+    if host in ("youtube.com", "www.youtube.com", "m.youtube.com"):
+        if path.startswith("watch"):
+            query = urllib.parse.parse_qs(parsed.query)
+            values = query.get("v")
+            if values and values[0]:
+                return values[0]
+        if path.startswith("embed/"):
+            parts = path.split("/", 1)
+            if len(parts) == 2 and parts[1]:
+                return parts[1]
+    return None
+
+
+def _infer_title_from_url(url: str) -> str:
+    parsed = urllib.parse.urlparse(url)
+    host = parsed.netloc or "media"
+    tail = parsed.path.rsplit("/", 1)[-1]
+    if tail:
+        return f"{host}/{tail}"
+    return host
+
+
+def resolve_video_url(source_url: str, video_index: int | None, cookies_from_browser: str | None) -> str:
+    """Resolve a source URL to a specific extracted video URL when an index is provided."""
+    if video_index is None:
+        return source_url
+    entries = list_url_videos(source_url, cookies_from_browser)
+    if not entries:
+        print("Error: no extractable videos found for --video-index.", file=sys.stderr)
+        sys.exit(1)
+    if video_index < 1 or video_index > len(entries):
+        print(
+            f"Error: --video-index {video_index} is out of range (1-{len(entries)}).",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    chosen = entries[video_index - 1].get("url") or ""
+    if not chosen:
+        print("Error: selected video entry has no URL.", file=sys.stderr)
+        sys.exit(1)
+    return chosen
 
 
 def get_audio_duration(file_path: str) -> float | None:
@@ -330,6 +517,7 @@ def process_single(
     audio_format: str,
     download_mode: str,
     video_index: int | None,
+    cookies_from_browser: str | None,
 ):
     """Process a single input file or online URL."""
     is_stream = is_stream_url(source)
@@ -340,7 +528,10 @@ def process_single(
         if is_stream:
             temp_dir = tempfile.mkdtemp(prefix="xscribe_")
             _temp_dirs.append(temp_dir)
-            file_path = download_stream(source, temp_dir, audio_format, download_mode, video_index)
+            source_url = resolve_video_url(source, video_index, cookies_from_browser)
+            file_path = download_stream(
+                source_url, temp_dir, audio_format, download_mode, None, cookies_from_browser
+            )
         else:
             file_path = os.path.abspath(source)
             if not os.path.isfile(file_path):
@@ -438,6 +629,10 @@ def main():
         type=int,
         help="For URL inputs with multiple videos, pick a 1-based index to download/transcribe.",
     )
+    parser.add_argument(
+        "--cookies-from-browser",
+        help="For URL inputs, pass browser cookies to yt-dlp (e.g. chrome, safari, firefox, edge).",
+    )
 
     args = parser.parse_args()
 
@@ -464,8 +659,8 @@ def main():
             if not is_stream_url(source):
                 print(f"Skipping non-URL input: {source}")
                 continue
-            check_dependencies(need_ytdlp=True)
-            entries = list_url_videos(source)
+            check_dependencies(need_ytdlp=True, need_whisper=False)
+            entries = list_url_videos(source, args.cookies_from_browser)
             print(f"\n{source}")
             if not entries:
                 print("  No extractable videos found.")
@@ -474,7 +669,8 @@ def main():
             for item in entries:
                 vid = f" | id={item['id']}" if item["id"] else ""
                 url_hint = f" | {item['url']}" if item["url"] else ""
-                print(f"  [{item['index']}] {item['title']}{vid}{url_hint}")
+                src = f" | source={item.get('source')}" if item.get("source") else ""
+                print(f"  [{item['index']}] {item['title']}{vid}{src}{url_hint}")
         if not listed_any:
             sys.exit(1)
         return
@@ -486,7 +682,14 @@ def main():
         if total > 1:
             print(f"\n[{i + 1}/{total}] {source}")
         if process_single(
-            source, args.model, args.output, args.lang, args.audio_format, args.download_mode, args.video_index
+            source,
+            args.model,
+            args.output,
+            args.lang,
+            args.audio_format,
+            args.download_mode,
+            args.video_index,
+            args.cookies_from_browser,
         ):
             success += 1
 
