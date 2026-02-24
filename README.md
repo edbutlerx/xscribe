@@ -2,7 +2,7 @@
 
 **Download and transcribe any online video in minutes.**
 
-Turn any video or audio file into a clean, timestamped markdown transcript. Just point xscribe at a file or stream URL and get a readable transcript — no cloud services, no subscriptions, everything runs locally on your machine.
+Turn any video or audio file into a clean, timestamped markdown transcript. Just point xscribe at a file, YouTube URL, or stream URL and get a readable transcript — no cloud services, no subscriptions, everything runs locally on your machine.
 
 Powered by [faster-whisper](https://github.com/SYSTRAN/faster-whisper).
 
@@ -30,13 +30,19 @@ xscribe interview.mp4
 
 This creates `interview.md` in your current folder with the full transcript and timestamps.
 
+**Transcribe a YouTube video:**
+
+```bash
+xscribe "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+```
+
 **Transcribe an online video stream:**
 
 ```bash
 xscribe "https://stream.example.com/video/playlist.m3u8"
 ```
 
-xscribe will download the video first, then transcribe it.
+xscribe will download the media first, then transcribe it.
 
 ## Usage examples
 
@@ -47,8 +53,8 @@ xscribe episode-42.mp3
 # Transcribe a lecture recording
 xscribe lecture.mov
 
-# Transcribe a YouTube stream URL
-xscribe "https://manifest.googlevideo.com/.../playlist.m3u8"
+# Transcribe a YouTube video URL
+xscribe "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 
 # Use a more accurate model (slower but better for tricky audio)
 xscribe meeting.mp4 -m large-v3
@@ -58,6 +64,16 @@ xscribe keynote.mp4 -o keynote-notes.md
 
 # Force a specific language instead of auto-detect
 xscribe video.mp4 -l es
+
+# Force URL downloads to convert to mp3
+xscribe "https://www.youtube.com/watch?v=dQw4w9WgXcQ" --audio-format mp3
+
+# Force URL downloads to keep video-first behavior
+xscribe "https://stream.example.com/video/playlist.m3u8" --download-mode video
+
+# List videos detected on a page and pick one by index
+xscribe "https://example.com/page-with-embeds" --list-videos
+xscribe "https://example.com/page-with-embeds" --video-index 2
 
 # Transcribe multiple files at once
 xscribe recording1.mp4 recording2.mp4 recording3.mp4
@@ -86,6 +102,10 @@ Most streaming videos use .m3u8 playlist URLs behind the scenes. Here's how to f
 |------|-------------|
 | `-m, --model` | Whisper model size (see below) |
 | `-l, --lang` | Force language code (e.g. `en`, `es`, `fr`, `de`, `ja`) |
+| `--download-mode` | For URL inputs, choose `audio` (default) or `video` download behavior |
+| `--audio-format` | For URL inputs, download/convert to one format: `best`, `mp3`, `m4a`, `wav`, `opus`, `vorbis`, `flac` |
+| `--list-videos` | For URL inputs, list extractable videos with 1-based indexes and exit |
+| `--video-index` | For URL inputs with multiple detected videos, pick one index to transcribe |
 | `-o, --output` | Custom output file path |
 | `-v, --version` | Show version |
 
