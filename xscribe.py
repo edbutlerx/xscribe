@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Video transcription CLI. Transcribes video/audio files to markdown with timestamps."""
 
-__version__ = "0.3.7"
+__version__ = "0.3.8"
 
 import argparse
 import glob
@@ -167,9 +167,12 @@ def download_stream(
         if ("youtube.com" in url or "youtu.be" in url) and (
             "http error 403" in lower_err or "sabr" in lower_err
         ):
+            update_cmd = "pip install -U yt-dlp"
+            if platform.system() == "Darwin":
+                update_cmd = "brew upgrade yt-dlp (or pip install -U yt-dlp)"
             print(
                 "Hint: YouTube is blocking this request. Try:\n"
-                "  1) pip install -U yt-dlp\n"
+                f"  1) {update_cmd}\n"
                 "  2) xscribe \"<youtube-url>\" --cookies-from-browser chrome\n"
                 "     (or safari/firefox/edge)",
                 file=sys.stderr,
